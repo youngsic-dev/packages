@@ -58,9 +58,17 @@ public final class TextureVideoPlayer extends VideoPlayer implements SurfaceProd
         () -> {
           androidx.media3.exoplayer.trackselection.DefaultTrackSelector trackSelector =
               new androidx.media3.exoplayer.trackselection.DefaultTrackSelector(context);
+          // Magic fork: wired mirrors open on the top HLS rung immediately instead of
+          // ramping from Media3's low WiFi-class initial estimate; WiFi keeps default.
+          androidx.media3.exoplayer.upstream.DefaultBandwidthMeter bandwidthMeter =
+              new androidx.media3.exoplayer.upstream.DefaultBandwidthMeter.Builder(context)
+                  .setInitialBitrateEstimate(
+                      androidx.media3.common.C.NETWORK_TYPE_ETHERNET, 20_000_000L)
+                  .build();
           ExoPlayer.Builder builder =
               new ExoPlayer.Builder(context)
                   .setTrackSelector(trackSelector)
+                  .setBandwidthMeter(bandwidthMeter)
                   .setMediaSourceFactory(asset.getMediaSourceFactory(context));
           return builder.build();
         });
