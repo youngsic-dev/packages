@@ -828,5 +828,48 @@ void main() {
         verify(api.selectAudioTrack(0, 1));
       });
     });
+
+    group('commands racing dispose', () {
+      test('idempotent commands no-op after dispose', () async {
+        final (AndroidVideoPlayer player, _, MockVideoPlayerInstanceApi api) = setUpMockPlayer(
+          playerId: 1,
+        );
+        await player.dispose(1);
+
+        await player.play(1);
+        await player.pause(1);
+        await player.setLooping(1, true);
+        await player.setVolume(1, 0.5);
+        await player.setPlaybackSpeed(1, 1.5);
+        await player.seekTo(1, const Duration(seconds: 10));
+
+        verifyNever(api.play());
+        verifyNever(api.pause());
+        verifyNever(api.setLooping(any));
+        verifyNever(api.setVolume(any));
+        verifyNever(api.setPlaybackSpeed(any));
+        verifyNever(api.seekTo(any));
+      });
+
+      test('getPosition returns zero after dispose', () async {
+        final (AndroidVideoPlayer player, _, _) = setUpMockPlayer(playerId: 1);
+        await player.dispose(1);
+
+        expect(await player.getPosition(1), Duration.zero);
+      });
+
+      test('non-idempotent surfaces still throw after dispose', () async {
+        final (AndroidVideoPlayer player, _, _) = setUpMockPlayer(playerId: 1);
+        await player.dispose(1);
+
+        expect(() => player.videoEventsFor(1), throwsStateError);
+        expect(() => player.getAudioTracks(1), throwsStateError);
+        expect(() => player.selectAudioTrack(1, '0_1'), throwsStateError);
+        expect(
+          () => player.buildViewWithOptions(const VideoViewOptions(playerId: 1)),
+          throwsStateError,
+        );
+      });
+    });
   });
 }

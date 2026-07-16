@@ -148,40 +148,40 @@ class AndroidVideoPlayer extends VideoPlayerPlatform {
   }
 
   @override
-  Future<void> setLooping(int playerId, bool looping) {
-    return _playerWith(id: playerId).setLooping(looping);
+  Future<void> setLooping(int playerId, bool looping) async {
+    await _playerIfActive(playerId)?.setLooping(looping);
   }
 
   @override
-  Future<void> play(int playerId) {
-    return _playerWith(id: playerId).play();
+  Future<void> play(int playerId) async {
+    await _playerIfActive(playerId)?.play();
   }
 
   @override
-  Future<void> pause(int playerId) {
-    return _playerWith(id: playerId).pause();
+  Future<void> pause(int playerId) async {
+    await _playerIfActive(playerId)?.pause();
   }
 
   @override
-  Future<void> setVolume(int playerId, double volume) {
-    return _playerWith(id: playerId).setVolume(volume);
+  Future<void> setVolume(int playerId, double volume) async {
+    await _playerIfActive(playerId)?.setVolume(volume);
   }
 
   @override
-  Future<void> setPlaybackSpeed(int playerId, double speed) {
+  Future<void> setPlaybackSpeed(int playerId, double speed) async {
     assert(speed > 0);
 
-    return _playerWith(id: playerId).setPlaybackSpeed(speed);
+    await _playerIfActive(playerId)?.setPlaybackSpeed(speed);
   }
 
   @override
-  Future<void> seekTo(int playerId, Duration position) {
-    return _playerWith(id: playerId).seekTo(position);
+  Future<void> seekTo(int playerId, Duration position) async {
+    await _playerIfActive(playerId)?.seekTo(position);
   }
 
   @override
   Future<Duration> getPosition(int playerId) async {
-    return _playerWith(id: playerId).getPosition();
+    return await _playerIfActive(playerId)?.getPosition() ?? Duration.zero;
   }
 
   @override
@@ -253,6 +253,15 @@ class AndroidVideoPlayer extends VideoPlayerPlatform {
     final _PlayerInstance? player = _players[id];
     return player ?? (throw StateError('No active player with ID $id.'));
   }
+
+  /// An idempotent command (play/pause/seek/volume/speed/looping, position
+  /// polling) can legitimately race [dispose]: video_player's controller
+  /// methods have await gaps between their disposed-check and the platform
+  /// call, so a missing player means "already disposed" and the command
+  /// no-ops. Everything else — widget builds, the event stream (initialize
+  /// would hang on an empty stream), and the audio-track APIs (contract:
+  /// disposed calls throw) — keeps the throwing [_playerWith] lookup.
+  _PlayerInstance? _playerIfActive(int id) => _players[id];
 
   PlatformVideoFormat? _platformVideoFormatFromVideoFormat(VideoFormat? format) {
     return switch (format) {
