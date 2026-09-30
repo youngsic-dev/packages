@@ -65,6 +65,35 @@ public class TextureExoPlayerEventListenerTest {
   }
 
   @Test
+  public void onPlaybackStateChangedReadyFallsBackToFormatSize_whenVideoSizeIsUnknown() {
+    TextureExoPlayerEventListener eventListener =
+        new TextureExoPlayerEventListener(mockExoPlayer, mockCallbacks, true);
+    Format videoFormat = new Format.Builder().setWidth(1080).setHeight(1500).build();
+
+    when(mockExoPlayer.getVideoSize()).thenReturn(VideoSize.UNKNOWN);
+    when(mockExoPlayer.getDuration()).thenReturn(10L);
+    when(mockExoPlayer.getVideoFormat()).thenReturn(videoFormat);
+
+    eventListener.onPlaybackStateChanged(Player.STATE_READY);
+    verify(mockCallbacks).onInitialized(1080, 1500, 10L, 0);
+  }
+
+  @Test
+  public void onPlaybackStateChangedReadyFallsBackToRotatedFormatSize_whenVideoSizeIsUnknown() {
+    TextureExoPlayerEventListener eventListener =
+        new TextureExoPlayerEventListener(mockExoPlayer, mockCallbacks, true);
+    Format videoFormat =
+        new Format.Builder().setWidth(1500).setHeight(1080).setRotationDegrees(90).build();
+
+    when(mockExoPlayer.getVideoSize()).thenReturn(VideoSize.UNKNOWN);
+    when(mockExoPlayer.getDuration()).thenReturn(10L);
+    when(mockExoPlayer.getVideoFormat()).thenReturn(videoFormat);
+
+    eventListener.onPlaybackStateChanged(Player.STATE_READY);
+    verify(mockCallbacks).onInitialized(1080, 1500, 10L, 0);
+  }
+
+  @Test
   public void
       onPlaybackStateChangedReadyInPortraitMode90DegreesDoesNotSwapWidthAndHeight_whenSurfaceProducerHandlesCropAndRotation() {
     TextureExoPlayerEventListener eventListener =

@@ -30,7 +30,14 @@ public final class TextureExoPlayerEventListener extends ExoPlayerEventListener 
     RotationDegrees rotationCorrection = RotationDegrees.ROTATE_0;
     int width = videoSize.width;
     int height = videoSize.height;
-    if (width != 0 && height != 0) {
+    // With video effects the size stays 0x0 until the first processed frame; use the Format.
+    Format videoFormat = exoPlayer.getVideoFormat();
+    if ((width == 0 || height == 0) && videoFormat != null) {
+      boolean swap = videoFormat.rotationDegrees == 90 || videoFormat.rotationDegrees == 270;
+      width = swap ? videoFormat.height : videoFormat.width;
+      height = swap ? videoFormat.width : videoFormat.height;
+    }
+    if (width > 0 && height > 0) {
       // When the SurfaceTexture backend for Impeller is used, the preview should already
       // be correctly rotated.
       if (!surfaceProducerHandlesCropAndRotation) {

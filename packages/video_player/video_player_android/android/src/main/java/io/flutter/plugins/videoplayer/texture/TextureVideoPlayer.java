@@ -10,9 +10,17 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RestrictTo;
 import androidx.annotation.VisibleForTesting;
+import androidx.media3.common.C;
+import androidx.media3.common.Format;
 import androidx.media3.common.MediaItem;
+import androidx.media3.common.util.Size;
 import androidx.media3.common.util.UnstableApi;
+import androidx.media3.effect.ScaleAndRotateTransformation;
+import androidx.media3.exoplayer.DecoderReuseEvaluation;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.Renderer;
+import androidx.media3.exoplayer.analytics.AnalyticsListener;
+import com.google.common.collect.ImmutableList;
 import io.flutter.plugins.videoplayer.ExoPlayerEventListener;
 import io.flutter.plugins.videoplayer.VideoAsset;
 import io.flutter.plugins.videoplayer.VideoPlayer;
@@ -30,6 +38,9 @@ import io.flutter.view.TextureRegistry.SurfaceProducer;
 public final class TextureVideoPlayer extends VideoPlayer implements SurfaceProducer.Callback {
   // True when the ExoPlayer instance has a null surface.
   private boolean needsSurface = true;
+  private final boolean appliesVideoEffects;
+  private int outputWidth;
+  private int outputHeight;
 
   /**
    * Creates a texture video player.
@@ -86,10 +97,60 @@ public final class TextureVideoPlayer extends VideoPlayer implements SurfaceProd
     super(events, mediaItem, options, surfaceProducer, exoPlayerProvider);
 
     surfaceProducer.setCallback(this);
+    // ImageReader surfaces draw the decoder's padded buffer; the GL effect pipeline applies crop.
+    appliesVideoEffects = !surfaceProducer.handlesCropAndRotation();
+    if (appliesVideoEffects) {
+      this.exoPlayer.setVideoEffects(
+          ImmutableList.of(new ScaleAndRotateTransformation.Builder().build()));
+      // onVideoSizeChanged only fires once a frame is rendered, which needs the size first.
+      this.exoPlayer.addAnalyticsListener(
+          new AnalyticsListener() {
+            @Override
+            public void onVideoInputFormatChanged(
+                @NonNull EventTime eventTime,
+                @NonNull Format format,
+                @Nullable DecoderReuseEvaluation decoderReuseEvaluation) {
+              boolean swap = format.rotationDegrees == 90 || format.rotationDegrees == 270;
+              setOutputSize(swap ? format.height : format.width, swap ? format.width : format.height);
+            }
+          });
+    }
 
     Surface surface = surfaceProducer.getSurface();
     this.exoPlayer.setVideoSurface(surface);
     needsSurface = surface == null;
+  }
+
+  /** The effect pipeline drops frames until it knows the output size, which a bare Surface lacks. */
+  private void setOutputSize(int width, int height) {
+    if (width <= 0 || height <= 0 || (width == outputWidth && height == outputHeight)) {
+      return;
+    }
+    outputWidth = width;
+    outputHeight = height;
+    assert surfaceProducer != null;
+    surfaceProducer.setSize(width, height);
+    if (!needsSurface) {
+      // setSize replaces the ImageReader, so hand the player the new surface.
+      exoPlayer.setVideoSurface(surfaceProducer.getSurface());
+      sendOutputResolution();
+    }
+  }
+
+  private void sendOutputResolution() {
+    if (!appliesVideoEffects || outputWidth == 0) {
+      return;
+    }
+    Size size = new Size(outputWidth, outputHeight);
+    for (int i = 0; i < exoPlayer.getRendererCount(); i++) {
+      if (exoPlayer.getRendererType(i) == C.TRACK_TYPE_VIDEO) {
+        exoPlayer
+            .createMessage(exoPlayer.getRenderer(i))
+            .setType(Renderer.MSG_SET_VIDEO_OUTPUT_RESOLUTION)
+            .setPayload(size)
+            .send();
+      }
+    }
   }
 
   @NonNull
@@ -101,9 +162,8 @@ public final class TextureVideoPlayer extends VideoPlayer implements SurfaceProd
           "surfaceProducer cannot be null to create an ExoPlayerEventListener for"
               + " TextureVideoPlayer.");
     }
-    boolean surfaceProducerHandlesCropAndRotation = surfaceProducer.handlesCropAndRotation();
-    return new TextureExoPlayerEventListener(
-        exoPlayer, videoPlayerEvents, surfaceProducerHandlesCropAndRotation);
+    // The SurfaceTexture or, on ImageReader, the video effect pipeline applies crop and rotation.
+    return new TextureExoPlayerEventListener(exoPlayer, videoPlayerEvents, true);
   }
 
   @RestrictTo(RestrictTo.Scope.LIBRARY)
@@ -113,6 +173,7 @@ public final class TextureVideoPlayer extends VideoPlayer implements SurfaceProd
       assert surfaceProducer != null;
       exoPlayer.setVideoSurface(surfaceProducer.getSurface());
       needsSurface = false;
+      sendOutputResolution();
     }
   }
 
