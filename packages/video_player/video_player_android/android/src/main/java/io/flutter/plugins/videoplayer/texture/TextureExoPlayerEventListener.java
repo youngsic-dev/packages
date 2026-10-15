@@ -8,6 +8,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.OptIn;
 import androidx.media3.common.Format;
 import androidx.media3.common.VideoSize;
+import androidx.media3.common.util.UnstableApi;
 import androidx.media3.exoplayer.ExoPlayer;
 import io.flutter.plugins.videoplayer.ExoPlayerEventListener;
 import io.flutter.plugins.videoplayer.VideoPlayerCallbacks;
@@ -24,13 +25,14 @@ public final class TextureExoPlayerEventListener extends ExoPlayerEventListener 
     this.surfaceProducerHandlesCropAndRotation = surfaceProducerHandlesCropAndRotation;
   }
 
+  @OptIn(markerClass = UnstableApi.class)
   @Override
   protected void sendInitialized() {
     VideoSize videoSize = exoPlayer.getVideoSize();
     RotationDegrees rotationCorrection = RotationDegrees.ROTATE_0;
     int width = videoSize.width;
     int height = videoSize.height;
-    // With video effects the size stays 0x0 until the first processed frame; use the Format.
+    // media3 reports no video size while effects are set; use the Format.
     Format videoFormat = exoPlayer.getVideoFormat();
     if ((width == 0 || height == 0) && videoFormat != null) {
       boolean swap = videoFormat.rotationDegrees == 90 || videoFormat.rotationDegrees == 270;

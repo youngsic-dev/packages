@@ -9,12 +9,19 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 import android.view.Surface;
+import androidx.annotation.OptIn;
 import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.C;
+import androidx.media3.common.Format;
 import androidx.media3.common.PlaybackParameters;
 import androidx.media3.common.Player;
 import androidx.media3.common.VideoSize;
+import androidx.media3.common.util.Size;
+import androidx.media3.common.util.UnstableApi;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.PlayerMessage;
+import androidx.media3.exoplayer.Renderer;
+import androidx.media3.exoplayer.analytics.AnalyticsListener;
 import io.flutter.plugins.videoplayer.texture.TextureVideoPlayer;
 import io.flutter.view.TextureRegistry;
 import org.junit.Before;
@@ -37,6 +44,7 @@ import org.robolectric.RobolectricTestRunner;
  * if the behavior changes, this test will need to change. However, this suite should catch bugs
  * related to <em>"this is a safe refactor with no behavior changes"</em>.
  */
+@OptIn(markerClass = UnstableApi.class)
 @RunWith(RobolectricTestRunner.class)
 public final class TextureVideoPlayerTest {
   private static final String FAKE_ASSET_URL = "https://flutter.dev/movie.mp4";
@@ -45,9 +53,13 @@ public final class TextureVideoPlayerTest {
   @Mock private VideoPlayerCallbacks mockEvents;
   @Mock private TextureRegistry.SurfaceProducer mockProducer;
   @Mock private ExoPlayer mockExoPlayer;
+  @Mock private Renderer mockRenderer;
+  @Mock private PlayerMessage mockPlayerMessage;
+  @Mock private AnalyticsListener.EventTime mockEventTime;
   @Captor private ArgumentCaptor<AudioAttributes> attributesCaptor;
   @Captor private ArgumentCaptor<TextureRegistry.SurfaceProducer.Callback> callbackCaptor;
   @Captor private ArgumentCaptor<Player.Listener> listenerCaptor;
+  @Captor private ArgumentCaptor<AnalyticsListener> analyticsListenerCaptor;
 
   @Rule public MockitoRule initRule = MockitoJUnit.rule();
 
@@ -65,6 +77,144 @@ public final class TextureVideoPlayerTest {
   private TextureVideoPlayer createVideoPlayer(VideoPlayerOptions options) {
     return new TextureVideoPlayer(
         mockEvents, mockProducer, fakeVideoAsset.getMediaItem(), options, () -> mockExoPlayer);
+  }
+
+  private void setUpVideoEffects() {
+    when(mockProducer.handlesCropAndRotation()).thenReturn(false);
+    when(mockExoPlayer.getRendererCount()).thenReturn(1);
+    when(mockExoPlayer.getRendererType(0)).thenReturn(C.TRACK_TYPE_VIDEO);
+    when(mockExoPlayer.getRenderer(0)).thenReturn(mockRenderer);
+    when(mockExoPlayer.createMessage(any())).thenReturn(mockPlayerMessage);
+    when(mockPlayerMessage.setType(anyInt())).thenReturn(mockPlayerMessage);
+    when(mockPlayerMessage.setPayload(any())).thenReturn(mockPlayerMessage);
+  }
+
+  private AnalyticsListener captureAnalyticsListener() {
+    verify(mockExoPlayer).addAnalyticsListener(analyticsListenerCaptor.capture());
+    return analyticsListenerCaptor.getValue();
+  }
+
+  @Test
+  public void setsVideoEffectsBeforePrepare() {
+    setUpVideoEffects();
+    VideoPlayer videoPlayer = createVideoPlayer();
+    captureAnalyticsListener();
+
+    InOrder inOrder = inOrder(mockExoPlayer);
+    inOrder.verify(mockExoPlayer).setVideoEffects(any());
+    inOrder.verify(mockExoPlayer).prepare();
+
+    videoPlayer.dispose();
+  }
+
+  @Test
+  public void onVideoInputFormatChangedSetsSizeAndSurfaceBeforeOutputResolution() {
+    setUpVideoEffects();
+    VideoPlayer videoPlayer = createVideoPlayer();
+    AnalyticsListener listener = captureAnalyticsListener();
+    Surface resizedSurface = mock(Surface.class);
+    when(mockProducer.getSurface()).thenReturn(resizedSurface);
+    Format format = new Format.Builder().setWidth(1080).setHeight(1500).build();
+
+    listener.onVideoInputFormatChanged(mockEventTime, format, null);
+
+    InOrder inOrder = inOrder(mockProducer, mockExoPlayer, mockPlayerMessage);
+    inOrder.verify(mockProducer).setSize(1080, 1500);
+    inOrder.verify(mockExoPlayer).setVideoSurface(resizedSurface);
+    inOrder.verify(mockExoPlayer).createMessage(mockRenderer);
+    inOrder.verify(mockPlayerMessage).setType(Renderer.MSG_SET_VIDEO_OUTPUT_RESOLUTION);
+    inOrder.verify(mockPlayerMessage).setPayload(new Size(1080, 1500));
+    inOrder.verify(mockPlayerMessage).send();
+
+    videoPlayer.dispose();
+  }
+
+  @Test
+  public void onVideoInputFormatChangedSwapsRotatedDimensions() {
+    setUpVideoEffects();
+    VideoPlayer videoPlayer = createVideoPlayer();
+    AnalyticsListener listener = captureAnalyticsListener();
+    Format format =
+        new Format.Builder().setWidth(1500).setHeight(1080).setRotationDegrees(90).build();
+
+    listener.onVideoInputFormatChanged(mockEventTime, format, null);
+
+    verify(mockProducer).setSize(1080, 1500);
+    verify(mockPlayerMessage).setPayload(new Size(1080, 1500));
+
+    videoPlayer.dispose();
+  }
+
+  @Test
+  public void onVideoInputFormatChangedWithSameSizeDoesNothing() {
+    setUpVideoEffects();
+    VideoPlayer videoPlayer = createVideoPlayer();
+    AnalyticsListener listener = captureAnalyticsListener();
+    Format format = new Format.Builder().setWidth(1080).setHeight(1500).build();
+
+    listener.onVideoInputFormatChanged(mockEventTime, format, null);
+    listener.onVideoInputFormatChanged(mockEventTime, format, null);
+
+    verify(mockProducer).setSize(1080, 1500);
+    verify(mockExoPlayer).createMessage(mockRenderer);
+    verify(mockPlayerMessage).setPayload(new Size(1080, 1500));
+    verify(mockPlayerMessage).send();
+
+    videoPlayer.dispose();
+  }
+
+  @Test
+  public void onVideoInputFormatChangedDefersOutputResolutionUntilSurfaceAvailable() {
+    setUpVideoEffects();
+    when(mockProducer.getSurface()).thenReturn(null);
+    TextureVideoPlayer videoPlayer = createVideoPlayer(new VideoPlayerOptions());
+    AnalyticsListener listener = captureAnalyticsListener();
+    Format format = new Format.Builder().setWidth(1080).setHeight(1500).build();
+
+    listener.onVideoInputFormatChanged(mockEventTime, format, null);
+
+    verify(mockProducer).setSize(1080, 1500);
+    verify(mockExoPlayer, never()).createMessage(any());
+    verifyNoInteractions(mockPlayerMessage);
+
+    Surface availableSurface = mock(Surface.class);
+    when(mockProducer.getSurface()).thenReturn(availableSurface);
+    videoPlayer.onSurfaceAvailable();
+
+    InOrder inOrder = inOrder(mockExoPlayer, mockPlayerMessage);
+    inOrder.verify(mockExoPlayer).setVideoSurface(availableSurface);
+    inOrder.verify(mockExoPlayer).createMessage(mockRenderer);
+    inOrder.verify(mockPlayerMessage).setType(Renderer.MSG_SET_VIDEO_OUTPUT_RESOLUTION);
+    inOrder.verify(mockPlayerMessage).setPayload(new Size(1080, 1500));
+    inOrder.verify(mockPlayerMessage).send();
+
+    videoPlayer.dispose();
+  }
+
+  @Test
+  public void onVideoInputFormatChangedAfterDisposeDoesNotSetSize() {
+    setUpVideoEffects();
+    VideoPlayer videoPlayer = createVideoPlayer();
+    AnalyticsListener listener = captureAnalyticsListener();
+    Format format = new Format.Builder().setWidth(1080).setHeight(1500).build();
+
+    videoPlayer.dispose();
+    when(mockExoPlayer.isReleased()).thenReturn(true);
+    listener.onVideoInputFormatChanged(mockEventTime, format, null);
+
+    verify(mockProducer, never()).setSize(anyInt(), anyInt());
+    verify(mockExoPlayer, never()).createMessage(any());
+  }
+
+  @Test
+  public void surfaceProducerHandlingCropAndRotationDoesNotUseVideoEffects() {
+    when(mockProducer.handlesCropAndRotation()).thenReturn(true);
+    VideoPlayer videoPlayer = createVideoPlayer();
+
+    verify(mockExoPlayer, never()).setVideoEffects(any());
+    verify(mockExoPlayer, never()).addAnalyticsListener(any());
+
+    videoPlayer.dispose();
   }
 
   @Test

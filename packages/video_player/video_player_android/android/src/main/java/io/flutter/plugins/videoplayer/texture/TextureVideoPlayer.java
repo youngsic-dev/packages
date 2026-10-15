@@ -8,6 +8,7 @@ import android.content.Context;
 import android.view.Surface;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.OptIn;
 import androidx.annotation.RestrictTo;
 import androidx.annotation.VisibleForTesting;
 import androidx.media3.common.C;
@@ -38,7 +39,6 @@ import io.flutter.view.TextureRegistry.SurfaceProducer;
 public final class TextureVideoPlayer extends VideoPlayer implements SurfaceProducer.Callback {
   // True when the ExoPlayer instance has a null surface.
   private boolean needsSurface = true;
-  private final boolean appliesVideoEffects;
   private int outputWidth;
   private int outputHeight;
 
@@ -77,7 +77,7 @@ public final class TextureVideoPlayer extends VideoPlayer implements SurfaceProd
                       androidx.media3.common.C.NETWORK_TYPE_ETHERNET, 20_000_000L)
                   .build();
           ExoPlayer.Builder builder =
-              new ExoPlayer.Builder(context)
+              new ExoPlayer.Builder(context, new ResizingRenderersFactory(context))
                   .setTrackSelector(trackSelector)
                   .setBandwidthMeter(bandwidthMeter)
                   .setMediaSourceFactory(asset.getMediaSourceFactory(context));
@@ -94,24 +94,47 @@ public final class TextureVideoPlayer extends VideoPlayer implements SurfaceProd
       @NonNull MediaItem mediaItem,
       @NonNull VideoPlayerOptions options,
       @NonNull ExoPlayerProvider exoPlayerProvider) {
-    super(events, mediaItem, options, surfaceProducer, exoPlayerProvider);
+    this(
+        events,
+        surfaceProducer,
+        mediaItem,
+        options,
+        exoPlayerProvider,
+        !surfaceProducer.handlesCropAndRotation());
+  }
+
+  @OptIn(markerClass = UnstableApi.class)
+  private TextureVideoPlayer(
+      @NonNull VideoPlayerCallbacks events,
+      @NonNull SurfaceProducer surfaceProducer,
+      @NonNull MediaItem mediaItem,
+      @NonNull VideoPlayerOptions options,
+      @NonNull ExoPlayerProvider exoPlayerProvider,
+      boolean appliesVideoEffects) {
+    super(
+        events,
+        mediaItem,
+        options,
+        surfaceProducer,
+        withVideoEffects(exoPlayerProvider, appliesVideoEffects));
 
     surfaceProducer.setCallback(this);
-    // ImageReader surfaces draw the decoder's padded buffer; the GL effect pipeline applies crop.
-    appliesVideoEffects = !surfaceProducer.handlesCropAndRotation();
     if (appliesVideoEffects) {
-      this.exoPlayer.setVideoEffects(
-          ImmutableList.of(new ScaleAndRotateTransformation.Builder().build()));
-      // onVideoSizeChanged only fires once a frame is rendered, which needs the size first.
+      // media3 reports no video size while effects are set; use the Format.
       this.exoPlayer.addAnalyticsListener(
           new AnalyticsListener() {
+            @OptIn(markerClass = UnstableApi.class)
             @Override
             public void onVideoInputFormatChanged(
                 @NonNull EventTime eventTime,
                 @NonNull Format format,
                 @Nullable DecoderReuseEvaluation decoderReuseEvaluation) {
+              if (exoPlayer.isReleased()) {
+                return;
+              }
               boolean swap = format.rotationDegrees == 90 || format.rotationDegrees == 270;
-              setOutputSize(swap ? format.height : format.width, swap ? format.width : format.height);
+              setOutputSize(
+                  swap ? format.height : format.width, swap ? format.width : format.height);
             }
           });
     }
@@ -121,8 +144,23 @@ public final class TextureVideoPlayer extends VideoPlayer implements SurfaceProd
     needsSurface = surface == null;
   }
 
-  /** The effect pipeline drops frames until it knows the output size, which a bare Surface lacks. */
-  private void setOutputSize(int width, int height) {
+  @OptIn(markerClass = UnstableApi.class)
+  @NonNull
+  private static ExoPlayerProvider withVideoEffects(
+      @NonNull ExoPlayerProvider exoPlayerProvider, boolean appliesVideoEffects) {
+    return () -> {
+      ExoPlayer player = exoPlayerProvider.get();
+      if (appliesVideoEffects) {
+        // ImageReader surfaces need the GL effect pipeline to apply the decoder crop.
+        player.setVideoEffects(
+            ImmutableList.of(new ScaleAndRotateTransformation.Builder().build()));
+      }
+      return player;
+    };
+  }
+
+  // The effect pipeline needs an explicit output size for a bare Surface.
+  void setOutputSize(int width, int height) {
     if (width <= 0 || height <= 0 || (width == outputWidth && height == outputHeight)) {
       return;
     }
@@ -137,8 +175,9 @@ public final class TextureVideoPlayer extends VideoPlayer implements SurfaceProd
     }
   }
 
+  @OptIn(markerClass = UnstableApi.class)
   private void sendOutputResolution() {
-    if (!appliesVideoEffects || outputWidth == 0) {
+    if (outputWidth == 0) {
       return;
     }
     Size size = new Size(outputWidth, outputHeight);
