@@ -61,14 +61,10 @@ public final class TextureVideoPlayer extends VideoPlayer implements SurfaceProd
       @NonNull SurfaceProducer surfaceProducer,
       @NonNull VideoAsset asset,
       @NonNull VideoPlayerOptions options) {
-    MediaItem mediaItem = asset.getMediaItem();
-    // Only local files (workouts) get the crop pass; streamed classes skip its cost.
-    boolean appliesVideoEffects =
-        isLocalSource(mediaItem) && !surfaceProducer.handlesCropAndRotation();
     return new TextureVideoPlayer(
         events,
         surfaceProducer,
-        mediaItem,
+        asset.getMediaItem(),
         options,
         () -> {
           androidx.media3.exoplayer.trackselection.DefaultTrackSelector trackSelector =
@@ -86,17 +82,7 @@ public final class TextureVideoPlayer extends VideoPlayer implements SurfaceProd
                   .setBandwidthMeter(bandwidthMeter)
                   .setMediaSourceFactory(asset.getMediaSourceFactory(context));
           return builder.build();
-        },
-        appliesVideoEffects);
-  }
-
-  @VisibleForTesting
-  static boolean isLocalSource(@NonNull MediaItem mediaItem) {
-    if (mediaItem.localConfiguration == null) {
-      return false;
-    }
-    String scheme = mediaItem.localConfiguration.uri.getScheme();
-    return scheme == null || "file".equals(scheme) || "asset".equals(scheme);
+        });
   }
 
   // TODO: Migrate to stable API, see https://github.com/flutter/flutter/issues/147039.
